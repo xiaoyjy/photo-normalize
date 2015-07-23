@@ -1,0 +1,145 @@
+#!/usr/bin/env php
+<?php
+
+while(($file = fgets(STDIN)))
+{
+	$file = trim($file);
+	if(!is_file($file))
+	{
+		echo "$file is not exists.\n";
+		continue;
+	}
+
+	$home = realpath(dirname(__DIR__));
+	if(exif_imagetype($file))
+	{
+		$data = @exif_read_data($file);
+		if(!$data)
+		{
+			$data = [];
+		}
+	}
+	else
+	{
+		$data = [];
+	}
+
+	$addr_dir   = $date_dir = '';
+	$lat = $lng = 0;
+	if(isset($data['GPSLatitude']))
+	{
+		list($v1, $v2, $v3) = $data['GPSLatitude'];
+		eval('$lat='.$v1.'+'.$v2.'/60+'.$v3.'/3600;');
+	}
+
+	if(isset($data['GPSLongitude']))
+	{
+		list($v1, $v2, $v3) = $data['GPSLongitude'];
+		eval('$lng='.$v1.'+'.$v2.'/60+'.$v3.'/3600;');
+	}
+
+	if(!empty($lat) && !empty($lng))
+	{
+		$api  = 'http://api.map.baidu.com/geoconv/v1/?from=1&to=5&ak=7ba0719260fdcc7fe0893e966ff97e6a&coords=';
+		$api .= $lng.','.$lat;
+		$geo = json_decode(curl_content($api), true);
+		if(empty($geo['result'][0]))
+		{
+			echo "Geo conv error.\n";
+			continue;
+		}
+
+		$result = $geo['result'][0];
+		$lng    = $result['x'];
+		$lat    = $result['y'];
+
+		$api  = 'http://api.map.baidu.com/geocoder/v2/?ak=7ba0719260fdcc7fe0893e966ff97e6a&output=json&pois=1&location=';
+		$api .= $lat.','.$lng;
+		$addr = json_decode(curl_content($api), true);
+		if(empty($addr['result']['addressComponent']))
+		{
+			echo "re-geocoding error.\n";
+			continue;
+		}
+
+		$addr_com = $addr['result']['addressComponent'];
+		$addr_dir = $home.'/Address/'.$addr_com['city'].'/'.$addr_com['district'].'/'.$addr_com['street'];
+	}
+
+	if(isset($data['MimeType']))
+	{
+		$type = strtoupper(substr($data['MimeType'], 6));
+		$type = str_replace($type, 'JPEG', 'JPG');
+	}
+	else
+	{
+		$type = substr($file, strrpos($file, '.')+1);
+	}
+
+	$md5  = md5_file($file);
+	$l1   = substr($md5, 0, 2);
+	$l2   = substr($md5, 2, 2);
+	$dir  = implode('', [$home, '/Library/', $l1 , '/', $l2]);
+	$path = implode('', [$dir, '/', $md5, '.', $type]);
+
+	echo $path, "\n";
+
+	$old  = realpath($file);
+	if($old !== $path)
+	{
+		if(!file_exists($dir))
+		{
+			mkdir ($dir , 0700, true);
+		}
+
+		rename($file, $path);
+	}
+
+	if(!empty($addr_dir))
+	{
+		$addr_path = implode('', [$addr_dir, '/', $md5, '.', $type]);
+		if(!file_exists($addr_dir))
+		{
+			mkdir  ($addr_dir , 0700, true);
+		}
+
+		if(!file_exists($addr_path))
+		{
+			symlink($path     , $addr_path);
+		}
+	}
+
+	if(isset($data['DateTime']))
+	{
+		$date_dir  = $home.'/Date/'.str_replace(':', '-', substr($data['DateTime'], 0, 10));
+		$date_path = implode('', [$date_dir, '/', $md5, '.', $type]);
+		if(!file_exists($date_dir))
+		{
+			mkdir  ($date_dir , 0700, true);
+		}
+
+		if(!file_exists($date_path))
+		{
+			symlink($path     , $date_path);
+		}
+	}
+
+}
+
+function curl_content($url)
+{
+	$ch = curl_init();
+	curl_setopt($ch, CURLOPT_URL, $url);
+	curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+
+	curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+	curl_setopt($ch, CURLOPT_TIMEOUT, 2);
+	$data     = curl_exec($ch);
+	$httpcode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+	curl_close($ch);
+
+	return ($httpcode>=200 && $httpcode<300) ? $data : false;
+}
+
+
+?>
